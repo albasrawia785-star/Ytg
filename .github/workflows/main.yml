@@ -1,0 +1,72 @@
+name: Build Debug Android APK with Firebase
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. سحب الكود من المستودع
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 2. إعداد بيئة جافا (JDK 17)
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'zulu'
+
+      # 3. فك ضغط ملف المشروع المرفوع
+      - name: Unzip project files
+        run: unzip *.zip -d project_dir
+
+      # 4. بناء نسخة الـ Debug APK
+      - name: Build Debug APK & Extract SHA-1
+        env:
+          _JAVA_OPTIONS: "-Djava.awt.headless=true"
+          GRADLE_OPTS: "-Djava.awt.headless=true -Dorg.gradle.jvmargs=-Djava.awt.headless=true"
+        run: |
+          TARGET_DIR=$(find project_dir -name "settings.gradle.kts" -exec dirname {} \;)
+          if [ -z "$TARGET_DIR" ]; then
+            echo "❌ خطأ: لم يتم العثور على ملفات مشروع أندرويد!"
+            exit 1
+          fi
+          cd "$TARGET_DIR"
+          
+          echo "🛠️ 1. تجهيز الـ Gradle Wrapper وتصاريح التشغيل..."
+          gradle wrapper
+          chmod +x gradlew
+
+          echo "🔑 2. إنشاء ملف debug.keystore المطلوب للتوقيع..."
+          keytool -genkey -v -keystore debug.keystore \
+            -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass "android" \
+            -keypass "android" \
+            -dname "CN=Android Debug, O=Android, C=US"
+
+          echo "🔍 3. التحقق من ملف google-services.json..."
+          if [ ! -f "app/google-services.json" ]; then
+            echo "⚠️ تنبيه: ملف google-services.json غير موجود داخل app/."
+          fi
+
+          echo "🚀 4. تنفيذ بناء نسخة الـ Debug..."
+          ./gradlew assembleDebug --no-daemon
+
+          echo "🔑 5. استخراج بصمة SHA-1..."
+          ./gradlew signingReport --no-daemon | grep -E "Variant: debug|SHA1:" || true
+
+          echo "✅ تم البناء بنجاح!"
+
+      # 5. رفع ملف الـ Debug APK النهائي
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: DebtTracker-Debug-APK
+          path: project_dir/**/build/outputs/apk/debug/*.apk
